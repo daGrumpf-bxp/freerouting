@@ -145,6 +145,7 @@ public final class DsnReader {
     closeQuietly(inputStream);
 
     if (readOk) {
+      DsnFile.convertPlatedSlotKeepouts(board);
       // Apply power-plane autoroute settings if the DSN had no (autoroute ...) scope
       if (scopeParameter.autorouteSettings == null) {
         DsnFile.adjustPlaneAutorouteSettings(board);
