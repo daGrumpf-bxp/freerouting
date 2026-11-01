@@ -5,9 +5,12 @@ import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Item;
+import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.FixedState;
+import app.freerouting.board.model.structure.Unit;
+import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.datastructures.IdentifierType;
@@ -21,6 +24,7 @@ import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.Polygon;
 import app.freerouting.geometry.planar.Polyline;
+import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.BoardRules;
 import app.freerouting.rules.DefaultItemClearanceClasses;
@@ -38,6 +42,9 @@ import java.util.Set;
   "checkstyle:VariableDeclarationUsageDistance"
 })
 public class Wiring extends ScopeKeyword {
+
+  /** Wire ends this close to a same-net pin centre are moved onto it (see snapToPinCentre). */
+  static final double PIN_SNAP_TOLERANCE_UM = 1.0;
 
   /** Creates a new instance of Wiring. */
   public Wiring() {
@@ -512,6 +519,13 @@ public class Wiring extends ScopeKeyword {
         }
         corners[i] = currentCorner.round();
       }
+      double pinSnapTolerance =
+          scopeParameter.coordinateTransform.dsnToBoard(
+              Unit.scale(PIN_SNAP_TOLERANCE_UM, Unit.UM, scopeParameter.unit));
+      corners[0] = snapToPinCentre(board, corners[0], layerIndex, netNumbers, pinSnapTolerance);
+      corners[corners.length - 1] =
+          snapToPinCentre(
+              board, corners[corners.length - 1], layerIndex, netNumbers, pinSnapTolerance);
 
       Polygon polygon = new Polygon(corners);
 
@@ -576,6 +590,36 @@ public class Wiring extends ScopeKeyword {
       tryCorrectNet(result);
     }
     return result;
+  }
+
+  /**
+   * Moves a wire end onto the centre of a pin of the same net when the two are less than
+   * toleranceBoard apart. Trace-to-pin contacts require the exact pin centre, and some writers lose
+   * a fraction of a micrometre on absolute wire coordinates while pins keep it (placement plus pad
+   * offset), which leaves the imported wire unconnected to its pad.
+   */
+  static IntPoint snapToPinCentre(
+      BasicBoard board, IntPoint end, int layer, int[] netNumbers, double toleranceBoard) {
+    if (end == null || netNumbers.length == 0 || toleranceBoard <= 0) {
+      return end;
+    }
+    FloatPoint endFloat = end.toFloat();
+    IntPoint best = null;
+    double bestDistance = toleranceBoard;
+    for (SearchTreeObject object : board.overlappingObjects(TileShape.getInstance(end), layer)) {
+      if (!(object instanceof Pin pin) || !pin.isOnLayer(layer) || !pin.sharesNetNo(netNumbers)) {
+        continue;
+      }
+      if (!(pin.getCenter() instanceof IntPoint centre)) {
+        continue;
+      }
+      double distance = endFloat.distance(centre.toFloat());
+      if (distance > 0 && distance <= bestDistance) {
+        best = centre;
+        bestDistance = distance;
+      }
+    }
+    return best != null ? best : end;
   }
 
   /**

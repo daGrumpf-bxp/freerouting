@@ -27,13 +27,14 @@ import org.junit.jupiter.api.Test;
 class RatsnestClearanceHeadlessTest {
 
   private static final String INCOMPLETE_FIXTURE =
-      "Issue575-drc_dev-board_4_hole_clearance_violations.dsn";
+      "Issue575-drc_Natural_Tone_Preamp_7_unconnected_items.dsn";
   private static final String VIOLATION_FIXTURE =
       "Issue575-drc_BBD_Mars-64_6_track_1_hole_clearance_violations.dsn";
 
-  // 3 unconnected components remain on dev-board; 6 previously missed T-junctions
-  // are now correctly recognized as connected by the centerline contact model.
-  private static final int EXPECTED_UNCONNECTED = 3;
+  // 11 incomplete connections on the partially routed Natural Tone Preamp (KiCad reports 7).
+  // dev-board, used before, is fully connected once wire ends rounded next to their pad centre
+  // are moved onto it on import.
+  private static final int EXPECTED_UNCONNECTED = 11;
   private static final int EXPECTED_UNIQUE_VIOLATIONS = 67;
 
   private static BasicBoard loadBoard(String filename) throws Exception {
@@ -64,7 +65,7 @@ class RatsnestClearanceHeadlessTest {
 
     AirLine[] airlines = drc.getAllAirlines();
     assertNotNull(airlines, "getAllAirlines must not return null");
-    assertFalse(airlines.length == 0, "a board with 9 incompletes must produce airlines");
+    assertFalse(airlines.length == 0, "a board with incompletes must produce airlines");
     assertEquals(
         EXPECTED_UNCONNECTED, airlines.length, "one airline per incomplete connection expected");
 

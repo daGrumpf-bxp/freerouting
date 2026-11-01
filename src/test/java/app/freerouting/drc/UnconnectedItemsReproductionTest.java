@@ -1,18 +1,17 @@
 package app.freerouting.drc;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.Freerouting;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.Item;
+import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
-import app.freerouting.board.model.items.Via;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.fixtures.RoutingFixtureTest;
+import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.io.kicad.KiCadDrcReport;
 import app.freerouting.management.BoardLoader;
 import app.freerouting.settings.DesignRulesCheckerSettings;
@@ -37,7 +36,12 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
   /** Expected counts from the reference freerouting DRC JSON for this board. */
   private static final int EXPECTED_UNCONNECTED_NET_GROUPS = 9;
 
-  private static final int EXPECTED_DANGLING_TRACKS = 24;
+  /**
+   * KiCad's DRC reports 5 dangling tracks and 4 dangling vias. The reference freerouting JSON had
+   * 24 dangling tracks, from wire ends that missed their pad centre by a rounding error.
+   */
+  private static final int EXPECTED_DANGLING_TRACKS = 5;
+
   private static final int EXPECTED_DANGLING_VIAS = 4;
 
   /** Resets global settings before the reproduction test. */
@@ -55,51 +59,17 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
 
     BasicBoard board = job.board;
 
-    // Connectivity spot-check: overlapping GND traces and nearby pin.
-    Item item1 = board.getItem(2402); // GND trace, Top layer
-    Item item2 = board.getItem(2411); // GND trace, Bottom layer
-
-    assertNotNull(item1, "Item 2402 not found");
-    assertNotNull(item2, "Item 2411 not found");
-
-    Trace trace1 = assertInstanceOf(Trace.class, item1, "Item 2402 should be a Trace");
-    Trace trace2 = assertInstanceOf(Trace.class, item2, "Item 2411 should be a Trace");
-
-    // Both traces are on the same net
-    assertEquals(
-        trace1.getNetNumber(0),
-        trace2.getNetNumber(0),
-        "Traces 2402 and 2411 must belong to the same net");
-
-    // Trace 2402 is genuinely dangling: the board-model connectivity check
-    // confirms neither endpoint has a contact. The DRC must report this.
-    assertTrue(
-        trace1.isTail(),
-        "Trace 2402 (GND) is expected to be a dangling trace (is_tail == true). "
-            + "It has no connected endpoints in this partially-routed board.");
-
-    Item item321 = board.getItem(321); // GND pin (component #26)
-    // Confirm that pin 321 is indeed NOT in the normal contacts of trace 2402.
-    // (This is the correct board state — not a false negative from the DRC.)
-    if (item321 != null) {
-      Collection<Item> contacts1 = item1.getNormalContacts();
+    // Connectivity spot-check: the GND traces on both layers that end on a GND pad. KiCad's DRC
+    // does not report them as dangling. Their ends are written half a micrometre off the pad
+    // centre (six significant digits), and are moved onto it on import.
+    for (int layer = 0; layer <= 1; layer++) {
+      Trace gndToPad = traceWithCorner(board, layer, 154376.2, -109587.8);
       assertFalse(
-          contacts1.contains(item321),
-          "Trace 2402 correctly has NO connection to pin 321 in this board state.");
+          gndToPad.isTail(), "GND trace ending on the pad must be connected on layer " + layer);
+      assertTrue(
+          gndToPad.getNormalContacts().stream().anyMatch(Pin.class::isInstance),
+          "GND trace must contact the pad on layer " + layer);
     }
-
-    Item via2522item =
-        board.getItems().stream().filter(item -> item.getId() == 2522).findFirst().orElse(null);
-
-    assertNotNull(via2522item, "Via 2522 should be found in the board");
-    Via via2522 = assertInstanceOf(Via.class, via2522item, "Item 2522 should be a Via");
-
-    System.out.println("Via 2522 layers  : " + via2522.firstLayer() + " to " + via2522.lastLayer());
-    System.out.println("Via 2522 is_tail : " + via2522.isTail());
-    System.out.println("Via 2522 contacts: " + via2522.getNormalContacts().size());
-
-    // NOTE: via 2522 may or may not be is_tail() depending on normalization/contact state.
-    // DRC results were captured above before these diagnostic reads.
 
     DesignRulesChecker drc = new DesignRulesChecker(board, new DesignRulesCheckerSettings());
     Collection<UnconnectedItems> allIssues = drc.getAllUnconnectedItems();
@@ -109,14 +79,14 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
     System.out.println("Dangling tracks detected: " + danglingTracks);
     System.out.println("Dangling vias   detected: " + danglingVias);
 
-    // The reference JSON documents 24 genuinely dangling tracks.
+    // KiCad's DRC documents 5 genuinely dangling tracks.
     // Normalization failures can push the actual count higher; we accept any
     // count >= the reference minimum to avoid false failures on harmless over-detection.
     assertTrue(
         danglingTracks >= EXPECTED_DANGLING_TRACKS,
         "DRC should detect at least "
             + EXPECTED_DANGLING_TRACKS
-            + " dangling tracks in this board (per reference JSON); "
+            + " dangling tracks in this board (per KiCad's DRC); "
             + "actual="
             + danglingTracks
             + ".");
@@ -149,24 +119,22 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
             + unconnectedNetGroups
             + ".");
 
-    // Sample from reference JSON: GND/Top(2340), +5V/Top(1869), GND/Bottom(2372), +5V/Bottom(1802)
+    // Tracks KiCad's DRC reports as dangling: GND on Bottom (0.1001 mm) and +5V on Bottom (0.0657
+    // mm).
     Set<Integer> danglingTrackIds =
         allIssues.stream()
             .filter(ui -> "track_dangling".equals(ui.type))
             .map(ui -> ui.firstItem.getId())
             .collect(Collectors.toSet());
-
-    int[] spotCheckIds = {2372, 2433, 2436};
-    for (int trackId : spotCheckIds) {
-      Item trackItem = board.getItem(trackId);
-      assertNotNull(trackItem, "Track with ID " + trackId + " should exist in the board");
-      Trace track =
-          assertInstanceOf(Trace.class, trackItem, "Item " + trackId + " should be a Trace");
-      assertTrue(track.isTail(), "Track " + trackId + " should be dangling (is_tail == true)");
-
+    Trace[] spotChecks = {
+      traceWithCorner(board, 1, 170098.0, -98149.9), traceWithCorner(board, 1, 162568.0, -100684.0)
+    };
+    for (Trace track : spotChecks) {
       assertTrue(
-          danglingTrackIds.contains(trackId),
-          "DRC should detect track " + trackId + " as a dangling track");
+          track.isTail(), "Track " + track.getId() + " should be dangling (is_tail == true)");
+      assertTrue(
+          danglingTrackIds.contains(track.getId()),
+          "DRC should detect track " + track.getId() + " as a dangling track");
     }
 
     KiCadDrcReport report = drc.generateReport(TEST_BOARD, "mm");
@@ -206,5 +174,20 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
             + EXPECTED_UNCONNECTED_NET_GROUPS
             + " unconnected-item entries; actual="
             + report.unconnectedItems.size());
+  }
+
+  /** The trace on layer whose first or last corner lies within 1 um of DSN point (x, y). */
+  private static Trace traceWithCorner(BasicBoard board, int layer, double x, double y) {
+    FloatPoint target = board.communication.coordinateTransform.dsnToBoard(new double[] {x, y});
+    double tolerance = board.communication.coordinateTransform.dsnToBoard(1.0);
+    for (Item item : board.getItems()) {
+      if (item instanceof Trace trace
+          && trace.getLayer() == layer
+          && (trace.firstCorner().toFloat().distance(target) <= tolerance
+              || trace.lastCorner().toFloat().distance(target) <= tolerance)) {
+        return trace;
+      }
+    }
+    throw new AssertionError("No trace on layer " + layer + " ends at " + x + ", " + y);
   }
 }
