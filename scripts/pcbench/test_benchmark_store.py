@@ -35,6 +35,22 @@ class BenchmarkStoreTest(unittest.TestCase):
         self.assertEqual(eta, 5)
         self.assertEqual(scale, 0.5)
 
+    def test_board_min_track_width_comes_from_the_kicad_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            board_dir = Path(tmp)
+            self.assertIsNone(store.board_min_track_width_um(board_dir))
+
+            pcb = board_dir / "processed.kicad_pcb"
+            pcb.write_text(
+                '(kicad_pcb (version 20171130)\n  (setup\n    (trace_min 0.254)\n  )\n'
+                '  (net_class Default "" (clearance 0.2) (trace_width 0.508))\n)\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(store.board_min_track_width_um(board_dir), 254.0)
+
+            pcb.write_text("(kicad_pcb (version 20171130) (setup))\n", encoding="utf-8")
+            self.assertIsNone(store.board_min_track_width_um(board_dir))
+
     def test_default_worker_count_uses_three_quarters_of_logical_processors(self) -> None:
         from unittest.mock import patch
 
