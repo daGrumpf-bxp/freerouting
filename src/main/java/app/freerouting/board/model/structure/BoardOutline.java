@@ -251,11 +251,13 @@ public class BoardOutline extends Item implements Serializable {
 
   /**
    * Erik Gavriluk (freerouting.net): whether a net with a pin on or beyond the outline (such as an
-   * edge connector's fingers) may route across the outline everywhere on the board. Default true
-   * for Specctra/DSN compatibility; can be set false when edge pins must not exempt other traces of
-   * that net from respecting edge clearance.
+   * edge connector's fingers) may route across the outline everywhere on the board.
+   *
+   * <p>Default false: the edge pin itself may touch or cross the outline, but every trace and via,
+   * including those of the edge pin's net, keeps its clearance to the outline, as KiCad's DRC
+   * ({@code copper_edge_clearance}) requires. Set true to restore the earlier net-wide exemption.
    */
-  public boolean edgePinNetsCrossOutline = true;
+  public boolean edgePinNetsCrossOutline = false;
 
   @Override
   public boolean isTraceObstacle(int netNumber) {
