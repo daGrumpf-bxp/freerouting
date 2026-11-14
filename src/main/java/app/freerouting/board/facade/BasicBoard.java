@@ -1243,7 +1243,7 @@ public class BasicBoard implements Serializable {
       }
       boolean isObstacle = true;
       for (int i = 0; i < netNumbers.length; i++) {
-        if (!currentItem.isTraceObstacle(netNumbers[i])) {
+        if (!currentItem.isTraceObstacle(netNumbers[i], currentTreeEntry.shapeIndexInObject)) {
           isObstacle = false;
         }
       }

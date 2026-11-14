@@ -5,15 +5,19 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.structure.BoardOutline;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.geometry.planar.FloatPoint;
+import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.rules.Net;
 import app.freerouting.settings.sources.TestingSettings;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * {@code Edge-pin-net-outline-garland.dsn}: a U-shaped board, 30 x 20 mm, with a 4 mm slot coming
@@ -24,6 +28,11 @@ import org.junit.jupiter.api.Test;
  * clearance to every track and via, including those of the pad's net. Freerouting exempted the
  * whole net of an edge pin from the outline, anywhere on the board: EDGE ran straight from A to B
  * through the slot, outside the board, while CTRL went around it.
+ *
+ * <p>Only the stretch of the outline next to the edge pad is exempt, for the pad's net, so that a
+ * trace can reach the pad. {@code Edge-pin-net-centre-on-outline-garland.dsn} is the same board
+ * with E a 1 x 1 mm pad centred on the top edge: Freerouting connects at the pad centre, so without
+ * that exemption E could not be reached at all.
  */
 class EdgePinNetOutlineTest extends RoutingFixtureTest {
 
@@ -61,12 +70,21 @@ class EdgePinNetOutlineTest extends RoutingFixtureTest {
     assertTrue(outline.isTraceObstacle(ctrl), "the opt-in only concerns edge-pin nets");
   }
 
-  @Test
-  void noTraceOfTheEdgePinNetLeavesTheBoard() {
-    RoutingJob job = runRoutingJob(getRoutingJob(FIXTURE, settings(true)));
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"Edge-pin-net-outline-garland.dsn", "Edge-pin-net-centre-on-outline-garland.dsn"})
+  void noTraceOfTheEdgePinNetLeavesTheBoard(String fixture) {
+    RoutingJob job = runRoutingJob(getRoutingJob(fixture, settings(true)));
     RoutingBoard board = job.board;
     BoardOutline outline = board.getOutline();
     int edge = netNumber(board, "EDGE");
+    IntBox edgePad = null;
+    for (Pin pin : board.getPins()) {
+      if ("E".equals(pin.componentName())) {
+        edgePad = pin.getShape(0).boundingBox();
+      }
+    }
+    assertTrue(edgePad != null, "the fixture has the edge pad E");
 
     int edgeTraces = 0;
     for (Trace trace : board.getTraces()) {
@@ -82,8 +100,13 @@ class EdgePinNetOutlineTest extends RoutingFixtureTest {
           double t = step / 50.0;
           FloatPoint point =
               new FloatPoint(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+          boolean onThePad =
+              point.x >= edgePad.ll.x
+                  && point.x <= edgePad.ur.x
+                  && point.y >= edgePad.ll.y
+                  && point.y <= edgePad.ur.y;
           assertTrue(
-              outline.contains(point),
+              outline.contains(point) || onThePad,
               "EDGE trace leaves the board at " + point + " (segment " + from + " -> " + to + ")");
         }
       }
