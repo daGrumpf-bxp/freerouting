@@ -251,9 +251,33 @@ public class PolygonShape extends PolylineShape {
     return true;
   }
 
+  /**
+   * Returns true if point lies on an edge of this polygon, its corners included. A hole of a {@link
+   * PolylineArea} is a polygon, and the area contains the points of its border: without this, a
+   * point on the edge of a hole was taken for a point inside it, while the closed convex tiles of
+   * the area contain it.
+   */
   @Override
   public boolean containsOnBorder(Point point) {
-    // FRLogger.warn("PolygonShape.contains_on_edge not yet implemented");
+    FloatPoint floatPoint = point.toFloat();
+    for (int i = 0; i < corners.length; i++) {
+      Point a = corners[i];
+      Point b = corners[(i + 1) % corners.length];
+      if (point.equals(a)) {
+        return true;
+      }
+      if (point.sideOf(a, b) != Side.COLLINEAR) {
+        continue;
+      }
+      FloatPoint fa = a.toFloat();
+      FloatPoint fb = b.toFloat();
+      if (floatPoint.x >= Math.min(fa.x, fb.x)
+          && floatPoint.x <= Math.max(fa.x, fb.x)
+          && floatPoint.y >= Math.min(fa.y, fb.y)
+          && floatPoint.y <= Math.max(fa.y, fb.y)) {
+        return true;
+      }
+    }
     return false;
   }
 
