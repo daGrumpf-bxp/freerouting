@@ -49,6 +49,19 @@ class KiCadRuleConditionTest {
   }
 
   @Test
+  void footprintSelectorWithColonMatchesTheLibraryIdentifier() {
+    Item connector = new Item(ItemType.PAD, "/RF", "Default", "J1", "1", true, "sma-j:SMA-J");
+    String around = "A.memberOfFootprint('sma-j:SMA-J') && !B.memberOfFootprint('sma-j:SMA-J')";
+    assertEquals(Tri.TRUE, eval(around, connector, SMD_PAD));
+    assertEquals(Tri.FALSE, eval(around, SMD_PAD, SMD_PAD));
+    assertEquals(Tri.TRUE, eval("A.memberOfFootprint('sma-j:*')", connector, connector));
+    // without a ':' the selector is a reference only, as in KiCad
+    assertEquals(Tri.FALSE, eval("A.memberOfFootprint('SMA-J')", connector, connector));
+    // an item without a footprint is never a member
+    assertEquals(Tri.FALSE, eval("A.memberOfFootprint('sma-j:*')", MAINS_TRACK, MAINS_TRACK));
+  }
+
+  @Test
   void propertiesAnItemDoesNotHaveAreNeitherEqualNorUnequal() {
     // A.Reference resolves to the footprint for a pad, and is undefined for a track
     assertEquals(Tri.TRUE, eval("A.Reference == 'K1'", COIL_PAD, COIL_PAD));
