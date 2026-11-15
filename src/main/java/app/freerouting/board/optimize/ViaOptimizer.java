@@ -19,9 +19,24 @@ import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.Map;
 
 /** Contains functions for optimizing and improving via locations. */
 public final class ViaOptimizer {
+
+  /**
+   * Maximum number of times a single via may be moved during one call of {@link
+   * TraceTightener#optChangedArea}.
+   *
+   * <p>{@code optChangedArea} repeats its rounds as long as something changed. A via can fail to
+   * converge: after a move from A to B, the connected traces may still pass through a corner at A
+   * that pulling tight does not remove, and the next round (or the recursion on the same via) moves
+   * the via back from B to A. Each move is reported as a change, so the loop runs until {@link
+   * TraceTightener#MAX_ROUNDS}, which can take minutes per item on a dense board. A converging via
+   * reaches its place in one or two moves; after this many moves the via keeps its current position
+   * for the rest of the call. The limit counts moves, not time, so the result stays deterministic.
+   */
+  static final int MAX_MOVES_PER_VIA_PER_CALL = 4;
 
   private ViaOptimizer() {}
 
@@ -36,6 +51,22 @@ public final class ViaOptimizer {
       ExpansionCostFactor[] traceCosts,
       int tracePullTightAccuracy,
       int maxRecursionDepth) {
+    return optViaLocation(board, via, traceCosts, tracePullTightAccuracy, maxRecursionDepth, null);
+  }
+
+  /**
+   * Same as {@link #optViaLocation(RoutingBoard, Via, ExpansionCostFactor[], int, int)}, but counts
+   * the moves of each via (by item id) in {@code moveCounts}: a via that has already been moved
+   * {@link #MAX_MOVES_PER_VIA_PER_CALL} times is left where it is. {@code moveCounts} may be null
+   * (no limit); it is meant to live for one call of {@link TraceTightener#optChangedArea}.
+   */
+  static boolean optViaLocation(
+      RoutingBoard board,
+      Via via,
+      ExpansionCostFactor[] traceCosts,
+      int tracePullTightAccuracy,
+      int maxRecursionDepth,
+      Map<Integer, Integer> moveCounts) {
     if (via.isShoveFixed()) {
       return false;
     }
@@ -132,6 +163,13 @@ public final class ViaOptimizer {
     if (newLocation == null || newLocation.equals(viaCenter)) {
       return false;
     }
+    if (moveCounts != null) {
+      int moves = moveCounts.getOrDefault(via.getId(), 0);
+      if (moves >= MAX_MOVES_PER_VIA_PER_CALL) {
+        return false;
+      }
+      moveCounts.put(via.getId(), moves + 1);
+    }
     Vector delta = newLocation.differenceBy(viaCenter);
     if (!DrillItemMover.insert(via, delta, 9, 9, null, board)) {
       FRLogger.warn("OptViaAlgo.opt_via_location: move via failed");
@@ -151,7 +189,12 @@ public final class ViaOptimizer {
     pickedItems = board.pickItems(newLocation, firstTrace.getLayer(), filter);
     for (Item currentItem : pickedItems) {
       optViaLocation(
-          board, (Via) currentItem, traceCosts, tracePullTightAccuracy, maxRecursionDepth - 1);
+          board,
+          (Via) currentItem,
+          traceCosts,
+          tracePullTightAccuracy,
+          maxRecursionDepth - 1,
+          moveCounts);
       break;
     }
     return true;

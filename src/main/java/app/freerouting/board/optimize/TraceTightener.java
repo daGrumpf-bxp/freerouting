@@ -25,6 +25,8 @@ import app.freerouting.geometry.planar.Side;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 
 /** Class with functionality for optimising traces and vias. */
@@ -142,6 +144,17 @@ public abstract class TraceTightener {
     if (board.changedArea == null) {
       return;
     }
+    // Moves per via id during this call, see ViaOptimizer.MAX_MOVES_PER_VIA_PER_CALL.
+    Map<Integer, Integer> viaMoveCounts = new HashMap<>();
+    try {
+      optChangedAreaRounds(traceCosts, viaMoveCounts);
+    } finally {
+      logViaMoveLimit(viaMoveCounts);
+    }
+  }
+
+  private void optChangedAreaRounds(
+      ExpansionCostFactor[] traceCosts, Map<Integer, Integer> viaMoveCounts) {
     boolean somethingChanged = true;
     // starting with curr_min_translate_dist big is a try to
     // avoid fine approximation at the beginning to avoid
@@ -179,12 +192,30 @@ public abstract class TraceTightener {
             }
           } else if (currentObject instanceof Via via && traceCosts != null) {
             if (ViaOptimizer.optViaLocation(
-                this.board, via, traceCosts, this.minTranslateDist, 10)) {
+                this.board, via, traceCosts, this.minTranslateDist, 10, viaMoveCounts)) {
               somethingChanged = true;
             }
           }
         }
       }
+    }
+  }
+
+  /** Reports the vias that reached the move limit during one optChangedArea call. */
+  private static void logViaMoveLimit(Map<Integer, Integer> viaMoveCounts) {
+    int capped = 0;
+    for (int moves : viaMoveCounts.values()) {
+      if (moves >= ViaOptimizer.MAX_MOVES_PER_VIA_PER_CALL) {
+        capped++;
+      }
+    }
+    if (capped > 0) {
+      FRLogger.info(
+          "Optimizer: "
+              + capped
+              + " via(s) reached the limit of "
+              + ViaOptimizer.MAX_MOVES_PER_VIA_PER_CALL
+              + " moves in one pass and were kept in place");
     }
   }
 
