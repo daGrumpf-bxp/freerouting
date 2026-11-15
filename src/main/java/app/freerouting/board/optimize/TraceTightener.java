@@ -25,6 +25,7 @@ import app.freerouting.geometry.planar.Side;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Set;
 
 /** Class with functionality for optimising traces and vias. */
@@ -143,6 +144,8 @@ public abstract class TraceTightener {
       return;
     }
     boolean somethingChanged = true;
+    // Vias whose last move was undone because it would have been undone at the next round.
+    Set<Integer> settledVias = new HashSet<>();
     // starting with curr_min_translate_dist big is a try to
     // avoid fine approximation at the beginning to avoid
     // problems with dog ears
@@ -179,7 +182,7 @@ public abstract class TraceTightener {
             }
           } else if (currentObject instanceof Via via && traceCosts != null) {
             if (ViaOptimizer.optViaLocation(
-                this.board, via, traceCosts, this.minTranslateDist, 10)) {
+                this.board, via, traceCosts, this.minTranslateDist, 10, settledVias)) {
               somethingChanged = true;
             }
           }

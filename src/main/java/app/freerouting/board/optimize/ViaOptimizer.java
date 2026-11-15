@@ -18,7 +18,9 @@ import app.freerouting.geometry.planar.Side;
 import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Set;
 
 /** Contains functions for optimizing and improving via locations. */
 public final class ViaOptimizer {
@@ -36,6 +38,28 @@ public final class ViaOptimizer {
       ExpansionCostFactor[] traceCosts,
       int tracePullTightAccuracy,
       int maxRecursionDepth) {
+    return optViaLocation(
+        board, via, traceCosts, tracePullTightAccuracy, maxRecursionDepth, new HashSet<>());
+  }
+
+  /**
+   * Same as {@link #optViaLocation(RoutingBoard, Via, ExpansionCostFactor[], int, int)}, for one
+   * fixpoint loop of the caller. {@code settledVias} holds the ids of the vias whose last move was
+   * undone during that loop: they are left in place, and a via whose move gets undone is added.
+   *
+   * <p>A move of a via between two traces is undone when, once the traces are pulled tight, the
+   * location this method would choose next is back within {@code tracePullTightAccuracy} of the
+   * starting point. Pulling tight does not always remove the corner the traces keep at the old via
+   * position (for example on a trace that is not at a multiple of 45 degrees on a 45 degree board).
+   * The via would then return there at the next round, and leave again at the one after.
+   */
+  public static boolean optViaLocation(
+      RoutingBoard board,
+      Via via,
+      ExpansionCostFactor[] traceCosts,
+      int tracePullTightAccuracy,
+      int maxRecursionDepth,
+      Set<Integer> settledVias) {
     if (via.isShoveFixed()) {
       return false;
     }
@@ -76,59 +100,11 @@ public final class ViaOptimizer {
     if (isPlaneOrFanoutVia) {
       return optPlaneOrFanoutVia(board, via, tracePullTightAccuracy, maxRecursionDepth);
     }
+    if (settledVias.contains(via.getId())) {
+      return false;
+    }
     Point viaCenter = via.getCenter();
-    int firstLayer = firstTrace.getLayer();
-    int secondLayer = secondTrace.getLayer();
-    Point firstTraceFromCorner;
-    Point secondTraceFromCorner;
-
-    // calculate firstTraceFromCorner and secondTraceFromCorner
-    // Use tolerance-based comparison to match connectivity detection logic
-    int tolerance = (int) (via.minWidth() / 2) + 1;
-
-    if (isWithinTolerance(firstTrace.firstCorner(), viaCenter, tolerance)) {
-      firstTraceFromCorner = firstTrace.polyline().corner(1);
-    } else if (isWithinTolerance(firstTrace.lastCorner(), viaCenter, tolerance)) {
-      firstTraceFromCorner = firstTrace.polyline().corner(firstTrace.polyline().cornerCount() - 2);
-    } else {
-      // Via is not connected at trace endpoints - skip optimization
-      return false;
-    }
-
-    if (isWithinTolerance(secondTrace.firstCorner(), viaCenter, tolerance)) {
-      secondTraceFromCorner = secondTrace.polyline().corner(1);
-    } else if (isWithinTolerance(secondTrace.lastCorner(), viaCenter, tolerance)) {
-      secondTraceFromCorner =
-          secondTrace.polyline().corner(secondTrace.polyline().cornerCount() - 2);
-    } else {
-      // Via is not connected at trace endpoints - skip optimization
-      return false;
-    }
-
-    ExpansionCostFactor firstLayerTraceCosts;
-    ExpansionCostFactor secondLayerTraceCosts;
-    if (traceCosts != null) {
-      firstLayerTraceCosts = traceCosts[firstLayer];
-      secondLayerTraceCosts = traceCosts[secondLayer];
-    } else {
-      firstLayerTraceCosts = new ExpansionCostFactor(1, 1);
-      secondLayerTraceCosts = firstLayerTraceCosts;
-    }
-
-    Point newLocation =
-        repositionVia(
-            board,
-            via,
-            firstTrace.getHalfWidth(),
-            firstTrace.clearanceClassIndex(),
-            firstTrace.getLayer(),
-            firstLayerTraceCosts,
-            firstTraceFromCorner,
-            secondTrace.getHalfWidth(),
-            secondTrace.clearanceClassIndex(),
-            secondTrace.getLayer(),
-            secondLayerTraceCosts,
-            secondTraceFromCorner);
+    Point newLocation = twoTraceViaLocation(board, via, firstTrace, secondTrace, traceCosts);
     if (newLocation == null || newLocation.equals(viaCenter)) {
       return false;
     }
@@ -147,14 +123,112 @@ public final class ViaOptimizer {
     for (Item currentItem : pickedItems) {
       ((PolylineTrace) currentItem).pullTight(true, tracePullTightAccuracy, null);
     }
+    Point nextLocation = twoTraceViaLocation(board, via, traceCosts);
+    if (nextLocation != null
+        && nextLocation.toFloat().distance(viaCenter.toFloat()) <= tracePullTightAccuracy) {
+      // The via would come back: the move did not pay off, undo it and leave the via there.
+      settledVias.add(via.getId());
+      if (!DrillItemMover.insert(via, viaCenter.differenceBy(via.getCenter()), 9, 9, null, board)) {
+        FRLogger.warn("OptViaAlgo.opt_via_location: undoing the via move failed");
+        return true;
+      }
+      return false;
+    }
     filter = new ItemSelectionFilter(ItemSelectionFilter.SelectableChoices.VIAS);
     pickedItems = board.pickItems(newLocation, firstTrace.getLayer(), filter);
     for (Item currentItem : pickedItems) {
       optViaLocation(
-          board, (Via) currentItem, traceCosts, tracePullTightAccuracy, maxRecursionDepth - 1);
+          board,
+          (Via) currentItem,
+          traceCosts,
+          tracePullTightAccuracy,
+          maxRecursionDepth - 1,
+          settledVias);
       break;
     }
     return true;
+  }
+
+  /**
+   * The location {@link #optViaLocation} would choose now for a via between two traces, or null if
+   * the via is not between two movable traces or no better location is found.
+   */
+  private static Point twoTraceViaLocation(
+      RoutingBoard board, Via via, ExpansionCostFactor[] traceCosts) {
+    Collection<Item> contacts = via.getNormalContacts();
+    if (contacts.size() != 2) {
+      return null;
+    }
+    Iterator<Item> it = contacts.iterator();
+    Item firstItem = it.next();
+    Item secondItem = it.next();
+    if (firstItem.isShoveFixed()
+        || !(firstItem instanceof PolylineTrace firstTrace)
+        || secondItem.isShoveFixed()
+        || !(secondItem instanceof PolylineTrace secondTrace)) {
+      return null;
+    }
+    return twoTraceViaLocation(board, via, firstTrace, secondTrace, traceCosts);
+  }
+
+  private static Point twoTraceViaLocation(
+      RoutingBoard board,
+      Via via,
+      PolylineTrace firstTrace,
+      PolylineTrace secondTrace,
+      ExpansionCostFactor[] traceCosts) {
+    Point viaCenter = via.getCenter();
+    int firstLayer = firstTrace.getLayer();
+    int secondLayer = secondTrace.getLayer();
+    Point firstTraceFromCorner;
+    Point secondTraceFromCorner;
+
+    // calculate firstTraceFromCorner and secondTraceFromCorner
+    // Use tolerance-based comparison to match connectivity detection logic
+    int tolerance = (int) (via.minWidth() / 2) + 1;
+
+    if (isWithinTolerance(firstTrace.firstCorner(), viaCenter, tolerance)) {
+      firstTraceFromCorner = firstTrace.polyline().corner(1);
+    } else if (isWithinTolerance(firstTrace.lastCorner(), viaCenter, tolerance)) {
+      firstTraceFromCorner = firstTrace.polyline().corner(firstTrace.polyline().cornerCount() - 2);
+    } else {
+      // Via is not connected at trace endpoints - skip optimization
+      return null;
+    }
+
+    if (isWithinTolerance(secondTrace.firstCorner(), viaCenter, tolerance)) {
+      secondTraceFromCorner = secondTrace.polyline().corner(1);
+    } else if (isWithinTolerance(secondTrace.lastCorner(), viaCenter, tolerance)) {
+      secondTraceFromCorner =
+          secondTrace.polyline().corner(secondTrace.polyline().cornerCount() - 2);
+    } else {
+      // Via is not connected at trace endpoints - skip optimization
+      return null;
+    }
+
+    ExpansionCostFactor firstLayerTraceCosts;
+    ExpansionCostFactor secondLayerTraceCosts;
+    if (traceCosts != null) {
+      firstLayerTraceCosts = traceCosts[firstLayer];
+      secondLayerTraceCosts = traceCosts[secondLayer];
+    } else {
+      firstLayerTraceCosts = new ExpansionCostFactor(1, 1);
+      secondLayerTraceCosts = firstLayerTraceCosts;
+    }
+
+    return repositionVia(
+        board,
+        via,
+        firstTrace.getHalfWidth(),
+        firstTrace.clearanceClassIndex(),
+        firstTrace.getLayer(),
+        firstLayerTraceCosts,
+        firstTraceFromCorner,
+        secondTrace.getHalfWidth(),
+        secondTrace.clearanceClassIndex(),
+        secondTrace.getLayer(),
+        secondLayerTraceCosts,
+        secondTraceFromCorner);
   }
 
   /** Optimisations for vias with only 1 connected Trace (Plane or Fanout Vias). */
