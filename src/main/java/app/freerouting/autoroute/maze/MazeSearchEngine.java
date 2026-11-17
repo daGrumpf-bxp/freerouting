@@ -410,6 +410,9 @@ public class MazeSearchEngine {
     if (autorouteEngine.board.layerStructure.layers[layer].isSignal) {
       return false;
     }
+    if (everyViaThroughThisPlaneReachesAnotherActiveLayer(layer)) {
+      return true;
+    }
     ItemSelectionFilter filter =
         new ItemSelectionFilter(ItemSelectionFilter.SelectableChoices.CONDUCTION);
     for (Item item : autorouteEngine.board.pickItems(drill.location, layer, filter)) {
@@ -418,6 +421,38 @@ public class MazeSearchEngine {
       }
     }
     return false;
+  }
+
+  /**
+   * Whether every via the net may use from the pin layer through the plane {@code planeLayer} also
+   * reaches an active signal layer other than the pin's: then a drill into that plane is an escape
+   * the net can use, whatever via the inserter picks for it.
+   */
+  private boolean everyViaThroughThisPlaneReachesAnotherActiveLayer(int planeLayer) {
+    int pinLayer = ctrl.fanoutStartPinLayer;
+    if (pinLayer < 0) {
+      return false;
+    }
+    int low = Math.min(pinLayer, planeLayer);
+    int high = Math.max(pinLayer, planeLayer);
+    boolean found = false;
+    for (AutorouteControl.ViaMask via : ctrl.viaInfos) {
+      if (via.fromLayer > low || via.toLayer < high) {
+        continue;
+      }
+      found = true;
+      boolean reaches = false;
+      for (int i = via.fromLayer; i <= via.toLayer; i++) {
+        if (i != pinLayer && ctrl.layerActive[i]) {
+          reaches = true;
+          break;
+        }
+      }
+      if (!reaches) {
+        return false;
+      }
+    }
+    return found;
   }
 
   /**
